@@ -392,7 +392,9 @@ async function extractPage(html) {
     if (b.tag === "li") return "• " + b.clean;
     return b.clean;
   });
-  // Trailing headings (bijv. "Gerelateerd") weghalen en opeenvolgende duplicaten verwijderen
+  // Metadata-regels bovenaan (Published…, Share, Save, By …) en koppen onderaan (bijv. "Gerelateerd") weghalen
+  const META_RE = /^(\u2022 |> )?(published|updated|last updated|share|save|by [A-Z]|\d+ (min|minutes?) read)/i;
+  while (out.length && (META_RE.test(out[0]) || out[0].startsWith("## "))) out.shift();
   while (out.length && out[out.length - 1].startsWith("## ")) out.pop();
   return {
     paragraphs: out.filter((p, i) => p !== out[i - 1]).slice(0, 150),
@@ -562,7 +564,8 @@ function stripHtml(s) {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n));
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)));
 }
 function clean(s) {
   return String(s ?? "").replace(/\s+/g, " ").trim();
