@@ -1,0 +1,14 @@
+name = "mijn-nieuws-api"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[ai]
+binding = "AI"
+
+[vars]
+# Komma-gescheiden lijst van toegestane origins voor de frontend
+ALLOWED_ORIGINS = "https://skoers.github.io"
+# Workers AI-model voor vertalen (zie https://developers.cloudflare.com/workers-ai/models/)
+TRANSLATE_MODEL = "@cf/mistralai/mistral-small-3.1-24b-instruct"

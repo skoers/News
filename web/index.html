@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Mijn Nieuws</title>
+  <meta name="description" content="Persoonlijke nieuwsfeed die leert van wat je leest, met Engelse artikelen vertaald naar het Nederlands.">
+  <meta name="theme-color" content="#0b57d0" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#111318" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <button class="icon-btn" id="btn-menu" aria-label="Instellingen">
+      <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </button>
+    <h1 class="brand"><span class="brand-dot"></span>Mijn Nieuws</h1>
+    <button class="icon-btn" id="btn-refresh" aria-label="Vernieuwen">
+      <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z"/></svg>
+    </button>
+  </header>
+
+  <nav class="tabs" id="tabs" aria-label="Rubrieken"></nav>
+
+  <main id="feed" class="feed" aria-live="polite"></main>
+
+  <div id="status" class="status" hidden></div>
+
+  <!-- Leesvenster -->
+  <section id="reader" class="reader" hidden aria-modal="true" role="dialog">
+    <div class="reader-bar">
+      <button class="icon-btn" id="reader-close" aria-label="Sluiten">
+        <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20z"/></svg>
+      </button>
+      <span class="reader-source" id="reader-source"></span>
+      <a class="icon-btn" id="reader-open" target="_blank" rel="noopener" aria-label="Open origineel">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3zm-9 2a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7h-2v7H5V7h7V5z"/></svg>
+      </a>
+    </div>
+    <div class="reader-body" id="reader-body"></div>
+  </section>
+
+  <!-- Instellingen -->
+  <section id="settings" class="sheet" hidden aria-modal="true" role="dialog">
+    <div class="sheet-bar">
+      <h2>Instellingen</h2>
+      <button class="icon-btn" id="settings-close" aria-label="Sluiten">
+        <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body">
+      <h3>Weergave</h3>
+      <label class="row"><span>Engelse koppen vertalen naar Nederlands</span><input type="checkbox" id="opt-translate-titles"></label>
+      <label class="row"><span>Artikel direct volledig laden bij openen</span><input type="checkbox" id="opt-autoload"></label>
+      <label class="row col"><span>Volledig artikel vertalen via</span>
+        <select id="opt-translate-mode">
+          <option value="ai">Workers AI in de app (±160 artikelen/dag gratis, daarna ±0,07 ct per artikel)</option>
+          <option value="google">Google Translate (gratis, opent de vertaalde site)</option>
+        </select>
+      </label>
+      <label class="row"><span>Gelezen artikelen verbergen</span><input type="checkbox" id="opt-hide-read"></label>
+
+      <h3>Bronnen</h3>
+      <p class="muted">Zet bronnen aan of uit. Je klikgedrag bepaalt daarna automatisch welke bronnen en onderwerpen hoger komen.</p>
+      <div id="feed-list" class="feed-list"></div>
+      <details class="add-feed">
+        <summary>Bron toevoegen (RSS/Atom-URL)</summary>
+        <form id="add-feed-form">
+          <input type="url" id="nf-url" placeholder="https://voorbeeld.nl/rss" required>
+          <input type="text" id="nf-name" placeholder="Naam (optioneel)">
+          <select id="nf-cat"></select>
+          <label class="row" style="margin:0"><span>Betaalmuur: open artikelen via archive.is</span><input type="checkbox" id="nf-paywall"></label>
+          <button type="submit" class="btn">Toevoegen</button>
+        </form>
+      </details>
+
+      <h3>Jouw interesseprofiel</h3>
+      <p class="muted">Dit leert de app van wat je aanklikt. Hoger = vaker getoond.</p>
+      <div id="profile-view" class="profile"></div>
+      <div class="btn-row">
+        <button class="btn ghost" id="btn-export">Exporteren</button>
+        <label class="btn ghost">Importeren<input type="file" id="file-import" accept="application/json" hidden></label>
+        <button class="btn danger" id="btn-reset">Profiel wissen</button>
+      </div>
+
+      <h3>Backend</h3>
+      <label class="row col"><span>API-adres (Cloudflare Worker)</span><input type="url" id="opt-api"></label>
+      <p class="muted" id="api-status"></p>
+    </div>
+  </section>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
