@@ -77,7 +77,7 @@
     { url: "https://www.scooterxpress.nl/feed/", name: "ScooterXpress", cat: "mobiliteit", lang: "nl" },
     { url: "https://www.livewire.com/blogs/news.atom", name: "LiveWire", cat: "mobiliteit", lang: "en" },
     // Algemeen NL extra
-    { url: "https://www.ad.nl/rss.xml", name: "AD", cat: "nl", lang: "nl", paywall: "archive" },
+    { url: "https://www.ad.nl/rss.xml", name: "AD", cat: "nl", lang: "nl" },
   ];
   // Onderwerpen die je expliciet volgt (aanpasbaar in Instellingen). Tellen zwaar mee in de rangschikking.
   const DEFAULT_INTERESTS = ["livewire", "elektrische motor", "electric motorcycle", "elektrische scooter", "e-scooter", "typegoedkeuring", "rdw", "e-bike", "warmtepomp", "huizenprijzen", "woningmarkt"];
@@ -111,6 +111,8 @@
     store.get("settings", {})
   );
   let feeds = store.get("feeds", null) || DEFAULT_FEEDS.map((f) => ({ ...f, enabled: true }));
+  // Migraties van eerder opgeslagen bronlijsten
+  for (const f of feeds) if (/ad\.nl/.test(f.url) && f.paywall) { delete f.paywall; store.set("feeds", feeds); }
   let profile = store.get("profile", { sources: {}, topics: {}, cats: {}, updated: Date.now(), clicks: 0 });
   let readSet = new Set(store.get("read", []));
   let interests = store.get("interests", null) || DEFAULT_INTERESTS.slice();

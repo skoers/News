@@ -1,5 +1,5 @@
 /* Service worker: app-shell offline beschikbaar, API altijd via netwerk. */
-const VERSION = "mn-v3";
+const VERSION = "mn-v4";
 const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./config.js", "./manifest.webmanifest", "./icon.svg"];
 
 self.addEventListener("install", (e) => {
