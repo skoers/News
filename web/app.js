@@ -107,7 +107,7 @@
   };
 
   const settings = Object.assign(
-    { translateTitles: true, autoload: true, hideRead: false, translateMode: "ai", apiBase: window.MN_CONFIG?.apiBase || "" },
+    { translateTitles: true, titlesWhen: "interact", autoload: true, hideRead: false, translateMode: "ai", apiBase: window.MN_CONFIG?.apiBase || "" },
     store.get("settings", {})
   );
   let feeds = store.get("feeds", null) || DEFAULT_FEEDS.map((f) => ({ ...f, enabled: true }));
@@ -259,6 +259,7 @@
   }
 
   function vote(item, v, btn) {
+    markInteracted();
     const prev = votes[item.id] || 0;
     if (prev === v) {
       delete votes[item.id];
@@ -410,9 +411,16 @@
   /* Koppen vertalen                                                      */
   /* ------------------------------------------------------------------ */
   let translating = false;
+  let interacted = false; // wordt true na het openen van een artikel of een stem; pas dan kosten we AI-tokens
+  function markInteracted() {
+    if (interacted) return;
+    interacted = true;
+    translateTitles();
+  }
   async function translateTitles() {
     if (!settings.translateTitles || translating) return;
-    const visible = currentList().slice(0, 60).filter((it) => it.lang !== "nl" && !titleCache[it.id]);
+    if (settings.titlesWhen === "interact" && !interacted) return;
+    const visible = currentList().slice(0, 40).filter((it) => it.lang !== "nl" && !titleCache[it.id]);
     if (!visible.length) return;
     translating = true;
     try {
@@ -534,6 +542,7 @@
   let readerAbort = null;
 
   function openReader(it) {
+    markInteracted();
     readSet.add(it.id);
     save.read();
     learn(it, 1);
@@ -657,6 +666,7 @@
     $("#opt-hide-read").checked = settings.hideRead;
     $("#opt-api").value = settings.apiBase;
     $("#opt-translate-mode").value = settings.translateMode;
+    $("#opt-titles-when").value = settings.titlesWhen;
     renderFeedList();
     renderInterests();
     renderProfile();
@@ -688,6 +698,7 @@
   $("#opt-translate-titles").onchange = (e) => { settings.translateTitles = e.target.checked; save.settings(); if (settings.translateTitles) translateTitles(); };
   $("#opt-autoload").onchange = (e) => { settings.autoload = e.target.checked; save.settings(); };
   $("#opt-hide-read").onchange = (e) => { settings.hideRead = e.target.checked; save.settings(); };
+  $("#opt-titles-when").onchange = (e) => { settings.titlesWhen = e.target.value; save.settings(); if (settings.titlesWhen === "always") translateTitles(); };
   $("#opt-translate-mode").onchange = (e) => { settings.translateMode = e.target.value; save.settings(); };
   $("#opt-api").onchange = (e) => { settings.apiBase = e.target.value.trim().replace(/\/$/, ""); save.settings(); checkApi(); };
 
@@ -803,7 +814,7 @@
     if (!reader.hidden) closeReader(true);
     else if (!sheet.hidden) closeSettings(true);
   });
-  $("#btn-refresh").onclick = () => refresh(true);
+  $("#btn-refresh").onclick = () => { interacted = true; refresh(true); };
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && Date.now() - lastRefresh > 10 * 60000) refresh();
   });
@@ -811,6 +822,7 @@
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
   decayProfile();
-  render();
-  refresh();
+  render(); // eerst de bewaarde vorige versie, direct leesbaar
+  if (items.length) setTimeout(() => refresh(), 400); // feeds verversen op de achtergrond (kost geen AI-tokens)
+  else refresh();
 })();
