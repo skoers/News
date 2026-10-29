@@ -154,3 +154,14 @@ input[type=url], input[type=text], select { padding: 10px 12px; border-radius: 1
 .profile .bar i { display: block; height: 6px; border-radius: 3px; background: var(--accent); min-width: 4px; }
 .profile .bar span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 420px) { .profile { grid-template-columns: 1fr; } }
+
+.votes { margin-left: auto; display: inline-flex; gap: 2px; }
+.vote { border: 0; background: transparent; font-size: 1rem; padding: 4px 6px; border-radius: 8px; cursor: pointer; opacity: .55; line-height: 1; color: var(--text); }
+.vote.on { opacity: 1; background: var(--accent-soft); }
+.reader-body .meta .votes { margin-left: 0; gap: 6px; }
+.reader-body .meta .vote { font-size: .85rem; border: 1px solid var(--line); opacity: .85; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 6px 6px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--text); font-size: .9rem; }
+.chip button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: .8rem; padding: 2px 6px; opacity: .7; }
+.inline-form { display: flex; gap: 8px; }
+.inline-form input { flex: 1; }

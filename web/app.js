@@ -68,7 +68,19 @@
     { url: "https://electrek.co/feed/", name: "Electrek", cat: "mobiliteit", lang: "en" },
     { url: "https://electrek.co/guides/electric-bicycle/feed/", name: "Electrek E-bikes", cat: "mobiliteit", lang: "en" },
     { url: "https://ebiketips.road.cc/rss", name: "ebiketips", cat: "mobiliteit", lang: "en" },
+    // Elektrische motoren & scooters (Europa / NL)
+    { url: "https://thepack.news/feed/", name: "The Pack (e-moto)", cat: "mobiliteit", lang: "en" },
+    { url: "https://electrek.co/guides/electric-motorcycles/feed/", name: "Electrek E-motorcycles", cat: "mobiliteit", lang: "en" },
+    { url: "https://www.rideapart.com/rss/category/electric/", name: "RideApart Electric", cat: "mobiliteit", lang: "en" },
+    { url: "https://www.nieuwsmotor.nl/feed/", name: "Nieuwsmotor", cat: "mobiliteit", lang: "nl" },
+    { url: "https://www.motor.nl/feed/", name: "MOTOR.nl", cat: "mobiliteit", lang: "nl" },
+    { url: "https://www.scooterxpress.nl/feed/", name: "ScooterXpress", cat: "mobiliteit", lang: "nl" },
+    { url: "https://www.livewire.com/blogs/news.atom", name: "LiveWire", cat: "mobiliteit", lang: "en" },
+    // Algemeen NL extra
+    { url: "https://www.ad.nl/rss.xml", name: "AD", cat: "nl", lang: "nl", paywall: "archive" },
   ];
+  // Onderwerpen die je expliciet volgt (aanpasbaar in Instellingen). Tellen zwaar mee in de rangschikking.
+  const DEFAULT_INTERESTS = ["livewire", "elektrische motor", "electric motorcycle", "elektrische scooter", "e-scooter", "typegoedkeuring", "rdw", "e-bike", "warmtepomp", "huizenprijzen", "woningmarkt"];
   const archiveUrl = (u) => "https://archive.is/newest/" + u;
   const googleTranslateUrl = (u) => "https://translate.google.com/translate?sl=auto&tl=nl&u=" + encodeURIComponent(u);
 
@@ -101,6 +113,8 @@
   let feeds = store.get("feeds", null) || DEFAULT_FEEDS.map((f) => ({ ...f, enabled: true }));
   let profile = store.get("profile", { sources: {}, topics: {}, cats: {}, updated: Date.now(), clicks: 0 });
   let readSet = new Set(store.get("read", []));
+  let interests = store.get("interests", null) || DEFAULT_INTERESTS.slice();
+  let votes = store.get("votes", {}); // id -> 1 (interessant) | -1 (niet interessant)
   let items = store.get("cache.items", []);
   let feedStatus = {};
   let activeTab = store.get("tab", "voorjou");
@@ -111,6 +125,12 @@
     feeds: () => store.set("feeds", feeds),
     profile: () => store.set("profile", profile),
     read: () => store.set("read", [...readSet].slice(-2000)),
+    interests: () => store.set("interests", interests),
+    votes: () => {
+      const keys = Object.keys(votes);
+      if (keys.length > 3000) for (const k of keys.slice(0, keys.length - 3000)) delete votes[k];
+      store.set("votes", votes);
+    },
     items: () => store.set("cache.items", items.slice(0, 400)),
     titles: () => {
       const keys = Object.keys(titleCache);
@@ -148,6 +168,11 @@
   /* ------------------------------------------------------------------ */
   /* Hulpfuncties                                                         */
   /* ------------------------------------------------------------------ */
+  function hashLite(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
+    return (h >>> 0).toString(16);
+  }
   const host = (u) => {
     try {
       return new URL(u).hostname.replace(/^www\./, "");
@@ -174,6 +199,46 @@
     )].slice(0, 14);
   }
   const api = (path) => settings.apiBase.replace(/\/$/, "") + path;
+  /** Link zonder tracking-parameters, voor ontdubbeling. */
+  function canonical(u) {
+    try {
+      const x = new URL(u);
+      x.hash = "";
+      for (const k of [...x.searchParams.keys()]) if (/^(utm_|at_|fbclid|gclid|ref$|source$|cmpid|ns_)/i.test(k)) x.searchParams.delete(k);
+      return x.toString().replace(/\/$/, "").replace(/^https?:\/\/(www\.)?/, "");
+    } catch {
+      return u;
+    }
+  }
+  const titleKey = (t) => keywords(t).sort().join(" ");
+  function similar(a, b) {
+    const A = new Set(a), B = new Set(b);
+    if (!A.size || !B.size) return 0;
+    let n = 0;
+    for (const w of A) if (B.has(w)) n++;
+    return n / Math.min(A.size, B.size);
+  }
+  /** Verwijdert dubbele berichten: zelfde link, of (bijna) dezelfde kop binnen 36 uur. */
+  function dedupe(list) {
+    const byLink = new Map();
+    for (const it of list) {
+      const k = canonical(it.link);
+      const cur = byLink.get(k);
+      if (!cur) byLink.set(k, it);
+      else if (!cur.image && it.image) byLink.set(k, { ...it, dupes: cur.dupes || 0 });
+    }
+    const out = [];
+    for (const it of byLink.values()) {
+      const t = new Date(it.published).getTime();
+      const twin = out.find((o) => Math.abs(new Date(o.published).getTime() - t) < 36 * 3600000 && similar(o.kw, it.kw) >= 0.75 && o.kw.length >= 3);
+      if (twin) {
+        twin.dupes = (twin.dupes || 0) + 1;
+        if (!twin.image && it.image) twin.image = it.image;
+        twin.sources = (twin.sources || [twin.source]).concat(it.source);
+      } else out.push({ ...it, dupes: 0 });
+    }
+    return out;
+  }
 
   /* ------------------------------------------------------------------ */
   /* Profiel / leren                                                      */
@@ -186,17 +251,31 @@
     for (const k of ["sources", "topics", "cats"]) {
       for (const key of Object.keys(profile[k])) {
         profile[k][key] *= f;
-        if (profile[k][key] < 0.05) delete profile[k][key];
+        if (Math.abs(profile[k][key]) < 0.05) delete profile[k][key];
       }
     }
     profile.updated = Date.now();
     save.profile();
   }
 
+  function vote(item, v, btn) {
+    const prev = votes[item.id] || 0;
+    if (prev === v) {
+      delete votes[item.id];
+      learn(item, -v * 2); // ongedaan maken
+    } else {
+      votes[item.id] = v;
+      learn(item, v * 2 - prev * 2);
+    }
+    save.votes();
+    toast(votes[item.id] === 1 ? "Meer hiervan" : votes[item.id] === -1 ? "Minder hiervan" : "Stem ingetrokken", 1200);
+    render(true);
+  }
+
   function learn(item, weight) {
     const bump = (obj, key, w) => {
       if (!key) return;
-      obj[key] = (obj[key] || 0) + w;
+      obj[key] = Math.max(-8, (obj[key] || 0) + w);
     };
     bump(profile.sources, item.sourceHost, weight);
     bump(profile.cats, item.cat, weight * 0.6);
@@ -211,14 +290,21 @@
     save.profile();
   }
 
+  const slog = (x) => Math.sign(x) * Math.log1p(Math.abs(x)); // log-schaal, ook voor negatieve scores
+  function interestHits(item) {
+    const text = (item.title + " " + (item.summary || "")).toLowerCase();
+    return interests.filter((w) => w && text.includes(w.toLowerCase()));
+  }
   function affinity(item) {
-    const src = Math.log1p(profile.sources[item.sourceHost] || 0);
-    const cat = Math.log1p(profile.cats[item.cat] || 0);
+    const src = slog(profile.sources[item.sourceHost] || 0);
+    const cat = slog(profile.cats[item.cat] || 0);
     let topic = 0;
     for (const w of item.kw) topic += profile.topics[w] || 0;
     for (const c of item.categories || []) topic += (profile.topics[c] || 0) * 0.5;
-    topic = Math.log1p(topic);
-    return { src, cat, topic, total: 0.8 * src + 0.4 * cat + 1.2 * topic };
+    topic = slog(topic);
+    const explicit = interestHits(item).length ? 1.5 : 0;
+    const vote = votes[item.id] || 0;
+    return { src, cat, topic, explicit, total: 0.8 * src + 0.4 * cat + 1.2 * topic + explicit + vote * 1.5 };
   }
 
   function rank(list) {
@@ -229,8 +315,9 @@
       const aff = affinity(it);
       const img = it.image ? 0.15 : 0;
       const readPenalty = readSet.has(it.id) ? -2 : 0;
+      const downvote = votes[it.id] === -1 ? -5 : 0;
       it.why = whyLabel(it, aff);
-      return { it, score: fresh * (1 + aff.total) + 0.3 * fresh + img + readPenalty + (Math.random() - 0.5) * 0.05 };
+      return { it, score: fresh * (1 + Math.max(-0.9, aff.total)) + 0.3 * fresh + img + readPenalty + downvote + (Math.random() - 0.5) * 0.05 };
     });
     scored.sort((a, b) => b.score - a.score);
     // Diversiteit: maximaal 2 artikelen van dezelfde bron per 6 posities bovenaan
@@ -250,6 +337,8 @@
   }
 
   function whyLabel(it, aff) {
+    const hit = interestHits(it)[0];
+    if (hit) return `Interesse: ${hit}`;
     if ((profile.clicks || 0) < 3) return "";
     if (aff.topic > 1.1) {
       const top = it.kw.concat(it.categories || []).map((w) => [w, profile.topics[w] || 0]).sort((a, b) => b[1] - a[1])[0];
@@ -299,11 +388,14 @@
       })
     );
     const merged = new Map();
-    for (const it of results.flat()) if (!merged.has(it.id)) merged.set(it.id, it);
+    for (const it of results.flat()) {
+      it.id = hashLite(canonical(it.link));
+      if (!merged.has(it.id)) merged.set(it.id, it);
+    }
     // bewaar ook oudere items (max 48 u) die uit de feed verdwenen zijn
     const cutoff = Date.now() - 48 * 3600000;
     for (const old of items) if (!merged.has(old.id) && new Date(old.published).getTime() > cutoff && feeds.some((f) => f.url === old.feedUrl && f.enabled !== false)) merged.set(old.id, old);
-    items = [...merged.values()].filter((it) => new Date(it.published).getTime() > Date.now() - 72 * 3600000 || !it.published);
+    items = dedupe([...merged.values()].filter((it) => new Date(it.published).getTime() > Date.now() - 72 * 3600000 || !it.published));
     save.items();
     const failed = Object.values(feedStatus).filter((s) => !s.ok).length;
     if (failed && !items.length) toast("Kon geen feeds laden. Controleer het API-adres in Instellingen.", 6000);
@@ -351,7 +443,7 @@
   /* ------------------------------------------------------------------ */
   function learnedTabs() {
     const top = Object.entries(profile.topics)
-      .filter(([w, s]) => s >= 2.5 && w.length >= 4)
+      .filter(([w, s]) => s >= 2.5 && w.length >= 4 && !interests.includes(w))
       .sort((a, b) => b[1] - a[1])
       .slice(0, 4)
       .map(([w]) => w);
@@ -407,10 +499,15 @@
       hero && it.summary ? el("div", { class: "summary" }, it.summary) : null,
       el("div", { class: "foot" },
         it.lang !== "nl" ? el("span", { class: "badge lang" }, it.lang) : null,
-        it.why ? el("span", { class: "badge why" }, it.why) : null
+        it.why ? el("span", { class: "badge why" }, it.why) : null,
+        it.dupes ? el("span", { class: "badge" }, `+${it.dupes} bron${it.dupes > 1 ? "nen" : ""}`) : null,
+        el("span", { class: "votes" },
+          el("button", { class: "vote" + (votes[it.id] === 1 ? " on" : ""), "aria-label": "Interessant", title: "Meer hiervan", onclick: (e) => { e.stopPropagation(); vote(it, 1); } }, "👍"),
+          el("button", { class: "vote" + (votes[it.id] === -1 ? " on" : ""), "aria-label": "Niet interessant", title: "Minder hiervan", onclick: (e) => { e.stopPropagation(); vote(it, -1); } }, "👎")
+        )
       )
     );
-    const c = el("button", { class: "card" + (hero ? " hero" : "") + (readSet.has(it.id) ? " read" : "") + (!img ? " no-image" : ""), onclick: () => openReader(it) });
+    const c = el("div", { class: "card" + (hero ? " hero" : "") + (readSet.has(it.id) ? " read" : "") + (!img ? " no-image" : ""), role: "button", tabindex: "0", onclick: () => openReader(it), onkeydown: (e) => { if (e.key === "Enter") openReader(it); } });
     if (hero) c.append(img, body);
     else c.append(body, img);
     return c;
@@ -448,7 +545,11 @@
     readerBody.replaceChildren(
       it.image ? el("img", { class: "hero-img", src: it.image, alt: "", referrerpolicy: "no-referrer", onerror: (e) => e.target.remove() }) : null,
       el("h1", { id: "reader-title" }, displayTitle(it)),
-      el("div", { class: "meta" }, el("span", {}, it.source), el("span", {}, "· " + timeAgo(it.published)), it.lang !== "nl" ? el("span", { class: "badge lang" }, it.lang) : null),
+      el("div", { class: "meta" }, el("span", {}, it.source), el("span", {}, "· " + timeAgo(it.published)), it.lang !== "nl" ? el("span", { class: "badge lang" }, it.lang) : null,
+        el("span", { class: "votes" },
+          el("button", { class: "vote" + (votes[it.id] === 1 ? " on" : ""), onclick: (e) => { vote(it, 1); e.target.classList.toggle("on", votes[it.id] === 1); e.target.nextSibling.classList.remove("on"); } }, "👍 Meer"),
+          el("button", { class: "vote" + (votes[it.id] === -1 ? " on" : ""), onclick: (e) => { vote(it, -1); e.target.classList.toggle("on", votes[it.id] === -1); e.target.previousSibling.classList.remove("on"); } }, "👎 Minder")
+        )),
       it.summary ? el("p", { class: "intro" }, it.summary) : null,
       el("div", { id: "reader-article" }, ...readButtons(it))
     );
@@ -557,9 +658,22 @@
     $("#opt-api").value = settings.apiBase;
     $("#opt-translate-mode").value = settings.translateMode;
     renderFeedList();
+    renderInterests();
     renderProfile();
     checkApi();
   }
+  function renderInterests() {
+    const box = $("#interest-list");
+    box.replaceChildren(...interests.map((w) =>
+      el("span", { class: "chip" }, w, el("button", { "aria-label": "Verwijderen", onclick: () => { interests = interests.filter((x) => x !== w); save.interests(); renderInterests(); } }, "✕"))
+    ));
+  }
+  $("#add-interest-form").onsubmit = (e) => {
+    e.preventDefault();
+    const w = $("#ni-word").value.trim().toLowerCase();
+    if (w && !interests.includes(w)) { interests.push(w); save.interests(); renderInterests(); }
+    e.target.reset();
+  };
   function closeSettings(fromPop) {
     if (sheet.hidden) return;
     sheet.hidden = true;
@@ -645,18 +759,19 @@
       box("Bronnen", profile.sources),
       box("Onderwerpen", profile.topics),
       box("Rubrieken", profile.cats, (k) => CATEGORIES[k] || k),
-      el("div", { class: "box" }, el("h4", {}, "Statistiek"), el("div", {}, `${profile.clicks || 0} artikelen geopend`), el("div", { class: "muted" }, `${readSet.size} gelezen`))
+      el("div", { class: "box" }, el("h4", {}, "Statistiek"), el("div", {}, `${profile.clicks || 0} artikelen geopend`), el("div", { class: "muted" }, `${readSet.size} gelezen · ${Object.values(votes).filter((v) => v === 1).length}× 👍 · ${Object.values(votes).filter((v) => v === -1).length}× 👎`))
     );
   }
   $("#btn-reset").onclick = () => {
     if (!confirm("Je interesseprofiel wissen? Bronnen blijven staan.")) return;
     profile = { sources: {}, topics: {}, cats: {}, updated: Date.now(), clicks: 0 };
-    save.profile();
+    votes = {};
+    save.profile(); save.votes();
     renderProfile();
     toast("Profiel gewist");
   };
   $("#btn-export").onclick = () => {
-    const blob = new Blob([JSON.stringify({ version: 1, settings, feeds, profile, read: [...readSet] }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ version: 2, settings, feeds, profile, interests, votes, read: [...readSet] }, null, 2)], { type: "application/json" });
     const a = el("a", { href: URL.createObjectURL(blob), download: `mijn-nieuws-${new Date().toISOString().slice(0, 10)}.json` });
     document.body.append(a);
     a.click();
@@ -671,7 +786,9 @@
       if (d.profile) profile = d.profile;
       if (d.settings) Object.assign(settings, d.settings);
       if (d.read) readSet = new Set(d.read);
-      save.feeds(); save.profile(); save.settings(); save.read();
+      if (d.interests) interests = d.interests;
+      if (d.votes) votes = d.votes;
+      save.feeds(); save.profile(); save.settings(); save.read(); save.interests(); save.votes();
       openSettings();
       toast("Geïmporteerd");
     } catch {
