@@ -34,11 +34,11 @@ export default {
         case "/health":
           return json({ ok: true, model: env.TRANSLATE_MODEL || DEFAULT_MODEL }, 200, cors);
         case "/feed":
-          return withCache(request, ctx, FEED_TTL, cors, () => handleFeed(url));
+          return await withCache(request, ctx, FEED_TTL, cors, () => handleFeed(url));
         case "/article":
-          return withCache(request, ctx, ARTICLE_TTL, cors, () => handleArticle(url, env));
+          return await withCache(request, ctx, ARTICLE_TTL, cors, () => handleArticle(url, env));
         case "/podcast":
-          return withCache(request, ctx, 86400, cors, () => handlePodcastLookup(url));
+          return await withCache(request, ctx, 86400, cors, () => handlePodcastLookup(url));
         case "/translate":
           if (request.method !== "POST") return json({ error: "POST required" }, 405, cors);
           return json(await handleTranslate(await request.json(), env, ctx), 200, cors);

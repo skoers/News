@@ -75,7 +75,6 @@
     { url: "https://www.nieuwsmotor.nl/feed/", name: "Nieuwsmotor", cat: "mobiliteit", lang: "nl" },
     { url: "https://www.motor.nl/feed/", name: "MOTOR.nl", cat: "mobiliteit", lang: "nl" },
     { url: "https://www.scooterxpress.nl/feed/", name: "ScooterXpress", cat: "mobiliteit", lang: "nl" },
-    { url: "https://www.livewire.com/blogs/news.atom", name: "LiveWire", cat: "mobiliteit", lang: "en" },
     // Algemeen NL extra
     { url: "https://www.ad.nl/rss.xml", name: "AD", cat: "nl", lang: "nl" },
     // Podcasts (feed wordt automatisch opgezocht in de Apple Podcasts-catalogus)
@@ -90,6 +89,8 @@
   const archiveUrl = (u) => "https://archive.is/newest/" + u;
   const googleTranslateUrl = (u) => "https://translate.google.com/translate?sl=auto&tl=nl&u=" + encodeURIComponent(u);
 
+  // Woorden die nooit een onderwerp of tab mogen worden (te generiek, komen uit feed-categorieën)
+  const GENERIC = new Set("nieuws news procent percent nieuwsbrief newsletter artikel artikelen article articles video videos foto fotos podcast aflevering episode update updates liveblog live blog opinie column analyse achtergrond binnenland buitenland algemeen overig home front page world europe nederland netherlands dutch uncategorized featured breaking laatste latest vandaag today week maand jaar miljoen miljard euro dollar mensen people".split(/\s+/));
   const STOP = new Set(("de het een en van in op voor met is zijn dat die niet ook aan er bij om door naar uit over nog maar wordt worden tot als dan heeft hebben was waren zijn hun hem haar ze zij wij jullie je ik u dit deze zo wat wie waar hoe wel geen meer veel al na onder tegen zonder tussen omdat terwijl want of dus toch kan kunnen moet moeten zal zullen zou zouden gaat gaan komt komen jaar jaren week dag dagen nieuwe nieuw grote groot eerste twee drie " +
     "the a an and of to in on for with is are was were be been being that this these those it its as at by from or but not no so if than then there their they them he she his her we you your our us who whom which what when where why how all any some more most other such only own same into over after before under again further once here out up down off about against between through during above below off has have had having do does did will would shall should can could may might must new says said say also one two three year years week day days first last like just get got make made").split(/\s+/));
 
@@ -118,6 +119,7 @@
   );
   let feeds = store.get("feeds", null) || DEFAULT_FEEDS.map((f) => ({ ...f, enabled: true }));
   // Migraties van eerder opgeslagen bronlijsten
+  feeds = feeds.filter((f) => !/livewire\.com\/blogs\/news\.atom/.test(f.url || ""));
   for (const d of DEFAULT_FEEDS.filter((f) => f.podcast)) {
     if (!feeds.some((f) => f.podcast && f.name === d.name)) { feeds.push({ ...d, enabled: true }); store.set("feeds", feeds); }
   }
@@ -125,7 +127,8 @@
   let profile = store.get("profile", { sources: {}, topics: {}, cats: {}, updated: Date.now(), clicks: 0 });
   let readSet = new Set(store.get("read", []));
   let interests = store.get("interests", null) || DEFAULT_INTERESTS.slice();
-  let votes = store.get("votes", {}); // id -> 1 (interessant) | -1 (niet interessant)
+  let votes = store.get("votes", {});
+  let ignored = new Set(store.get("ignored", [])); // id -> 1 (interessant) | -1 (niet interessant)
   let items = store.get("cache.items", []);
   let feedStatus = {};
   let activeTab = store.get("tab", "voorjou");
@@ -137,6 +140,7 @@
     profile: () => store.set("profile", profile),
     read: () => store.set("read", [...readSet].slice(-2000)),
     interests: () => store.set("interests", interests),
+    ignored: () => store.set("ignored", [...ignored]),
     votes: () => {
       const keys = Object.keys(votes);
       if (keys.length > 3000) for (const k of keys.slice(0, keys.length - 3000)) delete votes[k];
@@ -207,7 +211,7 @@
         .toLowerCase()
         .replace(/[’']/g, "")
         .split(/[^a-zà-ÿ0-9]+/i)
-        .filter((w) => w.length >= 4 && !STOP.has(w) && !/^\d+$/.test(w))
+        .filter((w) => w.length >= 4 && !STOP.has(w) && !GENERIC.has(w) && !/^\d+$/.test(w))
     )].slice(0, 14);
   }
   const api = (path) => settings.apiBase.replace(/\/$/, "") + path;
@@ -287,13 +291,13 @@
 
   function learn(item, weight) {
     const bump = (obj, key, w) => {
-      if (!key) return;
+      if (!key || (obj === profile.topics && ignored.has(key))) return;
       obj[key] = Math.max(-8, (obj[key] || 0) + w);
     };
     bump(profile.sources, item.sourceHost, weight);
     bump(profile.cats, item.cat, weight * 0.6);
     for (const w of keywords(item.title + " " + (item.summary || "").slice(0, 160))) bump(profile.topics, w, weight * 0.5);
-    for (const c of item.categories || []) bump(profile.topics, c, weight * 0.7);
+    for (const c of item.categories || []) if (!GENERIC.has(c) && !STOP.has(c) && c.length >= 4) bump(profile.topics, c, weight * 0.7);
     profile.clicks = (profile.clicks || 0) + (weight >= 1 ? 1 : 0);
     // Begrens: niets mag onbeperkt groeien
     for (const k of ["sources", "topics", "cats"]) {
@@ -426,11 +430,24 @@
   }
 
   /** Zoekt de RSS-feed van een podcast op via de Worker (Apple Podcasts-catalogus). */
+  async function podcastLookup({ appleId, lookup, country }) {
+    const direct = appleId
+      ? `https://itunes.apple.com/lookup?id=${appleId}&entity=podcast`
+      : `https://itunes.apple.com/search?term=${encodeURIComponent(lookup)}&media=podcast&country=${country || "nl"}&limit=8`;
+    try {
+      const r = await fetch(direct);
+      if (!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      return { results: (d.results || []).filter((x) => x.feedUrl).map((x) => ({ id: x.collectionId, name: x.collectionName, by: x.artistName, feed: x.feedUrl, image: x.artworkUrl600 || x.artworkUrl100 || "", apple: x.collectionViewUrl || "" })) };
+    } catch {
+      const q = appleId ? `id=${appleId}` : `q=${encodeURIComponent(lookup)}&country=${country || "nl"}`;
+      const r = await fetch(api(`/podcast?${q}`));
+      return r.json();
+    }
+  }
   async function resolvePodcast(f) {
     try {
-      const q = f.appleId ? `id=${f.appleId}` : `q=${encodeURIComponent(f.lookup)}&country=${f.country || "nl"}`;
-      const r = await fetch(api(`/podcast?${q}`));
-      const d = await r.json();
+      const d = await podcastLookup(f);
       let hit = (d.results || [])[0];
       if (f.match) hit = (d.results || []).find((x) => new RegExp(f.match, "i").test(x.by + " " + x.name)) || hit;
       if (!hit) throw new Error("niet gevonden");
@@ -484,8 +501,10 @@
   /* Weergave                                                             */
   /* ------------------------------------------------------------------ */
   function learnedTabs() {
+    const n = Math.max(1, items.length);
+    const freq = (w) => items.filter((it) => it.kw.includes(w) || (it.categories || []).includes(w)).length / n;
     const top = Object.entries(profile.topics)
-      .filter(([w, s]) => s >= 2.5 && w.length >= 4 && !interests.includes(w))
+      .filter(([w, s]) => s >= 2.5 && w.length >= 4 && !interests.includes(w) && !GENERIC.has(w) && freq(w) < 0.12)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 4)
       .map(([w]) => w);
@@ -497,6 +516,7 @@
     const usedCats = new Set(feeds.filter((f) => f.enabled !== false).map((f) => f.cat));
     const tabs = [["voorjou", "Voor jou"], ["laatste", "Laatste"]];
     for (const [k, label] of Object.entries(CATEGORIES)) if (usedCats.has(k)) tabs.push([k, label]);
+    if (feeds.some((f) => f.podcast && f.enabled !== false)) tabs.push(["podcasts", "🎧 Podcasts"]);
     for (const w of learnedTabs()) tabs.push(["kw:" + w, w[0].toUpperCase() + w.slice(1), true]);
     for (const [key, label, learned] of tabs) {
       tabsEl.append(
@@ -519,6 +539,7 @@
     let list = items;
     if (settings.hideRead) list = list.filter((it) => !readSet.has(it.id));
     if (activeTab === "laatste") return [...list].sort((a, b) => new Date(b.published) - new Date(a.published));
+    if (activeTab === "podcasts") return list.filter((it) => it.podcast).sort((a, b) => new Date(b.published) - new Date(a.published));
     if (activeTab.startsWith("kw:")) {
       const w = activeTab.slice(3);
       list = list.filter((it) => it.kw.includes(w) || (it.categories || []).includes(w) || it.title.toLowerCase().includes(w));
@@ -564,6 +585,19 @@
     if (!list.length) {
       feedEl.append(el("div", { class: "empty" }, items.length ? "Niets gevonden in deze rubriek." : "Nog geen nieuws geladen. Tik op vernieuwen."));
       return;
+    }
+    if (activeTab === "voorjou") {
+      const fresh = items.filter((it) => it.podcast && Date.now() - new Date(it.published).getTime() < 7 * 86400000).sort((a, b) => new Date(b.published) - new Date(a.published)).slice(0, 8);
+      if (fresh.length) {
+        feedEl.append(el("div", { class: "section-title" }, "🎧 Nieuwe podcastafleveringen"));
+        feedEl.append(el("div", { class: "pod-strip" }, ...fresh.map((it) => el("div", { class: "pod-tile" + (readSet.has(it.id) ? " read" : ""), role: "button", tabindex: "0", onclick: () => openReader(it) },
+          it.image ? el("img", { src: it.image, alt: "", loading: "lazy", referrerpolicy: "no-referrer" }) : el("div", { class: "pod-ph" }, "🎧"),
+          el("div", { class: "pod-src" }, it.source),
+          el("div", { class: "pod-title" }, it.title),
+          el("div", { class: "pod-date" }, fmtDate(it.published) + (it.duration ? " · " + it.duration.replace(/^00?:/, "") : ""))
+        ))));
+        feedEl.append(el("div", { class: "section-title" }, "Voor jou"));
+      }
     }
     list.slice(0, 120).forEach((it, i) => feedEl.append(card(it, i === 0 && activeTab !== "laatste" && !!it.image)));
     if (soft) window.scrollTo({ top: scrollY });
@@ -784,8 +818,7 @@
     const q = $("#np-name").value.trim();
     toast("Podcast zoeken…", 0);
     try {
-      const r = await fetch(api(`/podcast?q=${encodeURIComponent(q)}&country=nl`));
-      const d = await r.json();
+      const d = await podcastLookup({ lookup: q, country: "nl" });
       const hit = (d.results || [])[0];
       if (!hit) throw new Error("niets gevonden");
       if (feeds.some((f) => f.url === hit.feed)) return toast("Deze podcast staat er al in");
@@ -828,7 +861,8 @@
       const entries = Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, 8);
       const max = entries[0]?.[1] || 1;
       return el("div", { class: "box" }, el("h4", {}, title),
-        entries.length ? entries.map(([k, v]) => el("div", { class: "bar" }, el("i", { style: `width:${Math.max(4, Math.round((v / max) * 60))}px` }), el("span", {}, labelFn(k)), el("small", { class: "muted" }, v.toFixed(1)))) : el("div", { class: "muted" }, "Nog niets geleerd")
+        entries.length ? entries.map(([k, v]) => el("div", { class: "bar" }, el("i", { style: `width:${Math.max(4, Math.round((v / max) * 60))}px` }), el("span", {}, labelFn(k)), el("small", { class: "muted" }, v.toFixed(1)),
+          el("button", { class: "del", "aria-label": "Verwijderen", title: "Niet meer als onderwerp gebruiken", onclick: () => { delete obj[k]; if (obj === profile.topics) { ignored.add(k); save.ignored(); } save.profile(); renderProfile(); renderTabs(); } }, "✕"))) : el("div", { class: "muted" }, "Nog niets geleerd")
       );
     };
     view.replaceChildren(
@@ -886,6 +920,8 @@
 
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
+  for (const k of Object.keys(profile.topics)) if (GENERIC.has(k) || STOP.has(k) || k.length < 4) delete profile.topics[k];
+  save.profile();
   decayProfile();
   render(); // eerst de bewaarde vorige versie, direct leesbaar
   if (items.length) setTimeout(() => refresh(), 400); // feeds verversen op de achtergrond (kost geen AI-tokens)

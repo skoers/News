@@ -168,3 +168,13 @@ input[type=url], input[type=text], select { padding: 10px 12px; border-radius: 1
 
 .pod-label { font-size: .78rem; font-weight: 600; color: var(--accent); margin-bottom: 4px; }
 .reader-body audio { border-radius: 999px; }
+
+.pod-strip { display: flex; gap: 10px; overflow-x: auto; padding: 4px 2px 8px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.pod-strip::-webkit-scrollbar { display: none; }
+.pod-tile { flex: 0 0 150px; background: var(--surface); border-radius: 14px; padding: 10px; box-shadow: var(--shadow); cursor: pointer; }
+.pod-tile.read { opacity: .62; }
+.pod-tile img, .pod-ph { width: 130px; height: 130px; border-radius: 10px; object-fit: cover; background: var(--surface-2); display: flex; align-items: center; justify-content: center; font-size: 2rem; }
+.pod-src { font-size: .72rem; color: var(--muted); margin-top: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pod-title { font-size: .85rem; font-weight: 600; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin-top: 2px; }
+.pod-date { font-size: .72rem; color: var(--accent); margin-top: 4px; }
+.profile .bar .del { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: .75rem; }

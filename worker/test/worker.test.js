@@ -112,3 +112,14 @@ test("CORS: unknown origin is refused", async () => {
   const res = await worker.fetch(new Request("https://api.test/health", { headers: { Origin: "https://evil.example" } }), env, ctx);
   assert.equal(res.status, 403);
 });
+
+test("fout bij ophalen bron geeft JSON-fout, geen exception", async () => {
+  const orig = globalThis.fetch;
+  globalThis.fetch = async () => new Response("nope", { status: 503 });
+  try {
+    const res = await call("/feed?url=https://down.example/rss.xml");
+    assert.equal(res.status, 500);
+    const d = await res.json();
+    assert.match(d.error, /503/);
+  } finally { globalThis.fetch = orig; }
+});
