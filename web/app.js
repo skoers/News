@@ -78,7 +78,13 @@
     { url: "https://www.livewire.com/blogs/news.atom", name: "LiveWire", cat: "mobiliteit", lang: "en" },
     // Algemeen NL extra
     { url: "https://www.ad.nl/rss.xml", name: "AD", cat: "nl", lang: "nl" },
+    // Podcasts (feed wordt automatisch opgezocht in de Apple Podcasts-catalogus)
+    { url: "", podcast: true, lookup: "AI Report", match: "kl[öo]pping|dag en nacht|hage", country: "nl", name: "AI Report (Klöpping & Hage)", cat: "ai", lang: "nl" },
+    { url: "", podcast: true, lookup: "AI, je nieuwe collega", country: "nl", name: "AI, je nieuwe collega", cat: "ai", lang: "nl" },
+    { url: "https://feeds.simplecast.com/l2i9YnTd", podcast: true, appleId: "1528594034", name: "Hard Fork (NYT)", cat: "ai", lang: "en" },
+    { url: "", podcast: true, appleId: "1680633614", lookup: "The AI Daily Brief", country: "us", name: "The AI Daily Brief", cat: "ai", lang: "en" },
   ];
+  const spotifySearchUrl = (q) => "https://open.spotify.com/search/" + encodeURIComponent(q) + "/podcastAndEpisodes";
   // Onderwerpen die je expliciet volgt (aanpasbaar in Instellingen). Tellen zwaar mee in de rangschikking.
   const DEFAULT_INTERESTS = ["livewire", "elektrische motor", "electric motorcycle", "elektrische scooter", "e-scooter", "typegoedkeuring", "rdw", "e-bike", "warmtepomp", "huizenprijzen", "woningmarkt"];
   const archiveUrl = (u) => "https://archive.is/newest/" + u;
@@ -112,6 +118,9 @@
   );
   let feeds = store.get("feeds", null) || DEFAULT_FEEDS.map((f) => ({ ...f, enabled: true }));
   // Migraties van eerder opgeslagen bronlijsten
+  for (const d of DEFAULT_FEEDS.filter((f) => f.podcast)) {
+    if (!feeds.some((f) => f.podcast && f.name === d.name)) { feeds.push({ ...d, enabled: true }); store.set("feeds", feeds); }
+  }
   for (const f of feeds) if (/ad\.nl/.test(f.url) && f.paywall) { delete f.paywall; store.set("feeds", feeds); }
   let profile = store.get("profile", { sources: {}, topics: {}, cats: {}, updated: Date.now(), clicks: 0 });
   let readSet = new Set(store.get("read", []));
@@ -183,6 +192,7 @@
     }
   };
   const favicon = (u) => `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host(u))}&sz=64`;
+  const fmtDate = (iso) => new Date(iso).toLocaleDateString("nl-NL", { day: "numeric", month: "short" });
   function timeAgo(iso) {
     const diff = (Date.now() - new Date(iso).getTime()) / 60000;
     if (diff < 1) return "nu";
@@ -232,7 +242,7 @@
     const out = [];
     for (const it of byLink.values()) {
       const t = new Date(it.published).getTime();
-      const twin = out.find((o) => Math.abs(new Date(o.published).getTime() - t) < 36 * 3600000 && similar(o.kw, it.kw) >= 0.75 && o.kw.length >= 3);
+      const twin = it.podcast ? null : out.find((o) => !o.podcast && Math.abs(new Date(o.published).getTime() - t) < 36 * 3600000 && similar(o.kw, it.kw) >= 0.75 && o.kw.length >= 3);
       if (twin) {
         twin.dupes = (twin.dupes || 0) + 1;
         if (!twin.image && it.image) twin.image = it.image;
@@ -319,8 +329,9 @@
       const img = it.image ? 0.15 : 0;
       const readPenalty = readSet.has(it.id) ? -2 : 0;
       const downvote = votes[it.id] === -1 ? -5 : 0;
+      const podcastBoost = it.podcast && ageH < 7 * 24 && !readSet.has(it.id) ? 1.2 : 0;
       it.why = whyLabel(it, aff);
-      return { it, score: fresh * (1 + Math.max(-0.9, aff.total)) + 0.3 * fresh + img + readPenalty + downvote + (Math.random() - 0.5) * 0.05 };
+      return { it, score: fresh * (1 + Math.max(-0.9, aff.total)) + 0.3 * fresh + img + readPenalty + downvote + podcastBoost + (Math.random() - 0.5) * 0.05 };
     });
     scored.sort((a, b) => b.score - a.score);
     // Diversiteit: maximaal 2 artikelen van dezelfde bron per 6 posities bovenaan
@@ -367,8 +378,10 @@
     $("#btn-refresh").classList.add("spin");
     if (!items.length) renderSkeleton();
     const enabled = feeds.filter((f) => f.enabled !== false);
+    await Promise.all(enabled.filter((f) => f.podcast && !f.url).map(resolvePodcast));
     const results = await Promise.all(
       enabled.map(async (f) => {
+        if (!f.url) return [];
         try {
           const r = await fetch(api(`/feed?url=${encodeURIComponent(f.url)}`), { cache: force ? "reload" : "default" });
           const data = await r.json();
@@ -380,6 +393,9 @@
             sourceHost: host(it.link) || host(f.url),
             feedUrl: f.url,
             cat: f.cat || "overig",
+            podcast: !!f.podcast,
+            apple: f.apple || "",
+            image: it.image || f.image || data.image || "",
             paywall: f.paywall || "",
             lang: f.lang || it.lang || "en",
             kw: keywords(it.title + " " + (it.summary || "").slice(0, 160)),
@@ -398,7 +414,7 @@
     // bewaar ook oudere items (max 48 u) die uit de feed verdwenen zijn
     const cutoff = Date.now() - 48 * 3600000;
     for (const old of items) if (!merged.has(old.id) && new Date(old.published).getTime() > cutoff && feeds.some((f) => f.url === old.feedUrl && f.enabled !== false)) merged.set(old.id, old);
-    items = dedupe([...merged.values()].filter((it) => new Date(it.published).getTime() > Date.now() - 72 * 3600000 || !it.published));
+    items = dedupe([...merged.values()].filter((it) => new Date(it.published).getTime() > Date.now() - (it.podcast ? 14 * 24 : 72) * 3600000 || !it.published));
     save.items();
     const failed = Object.values(feedStatus).filter((s) => !s.ok).length;
     if (failed && !items.length) toast("Kon geen feeds laden. Controleer het API-adres in Instellingen.", 6000);
@@ -407,6 +423,22 @@
     $("#btn-refresh").classList.remove("spin");
     render();
     translateTitles();
+  }
+
+  /** Zoekt de RSS-feed van een podcast op via de Worker (Apple Podcasts-catalogus). */
+  async function resolvePodcast(f) {
+    try {
+      const q = f.appleId ? `id=${f.appleId}` : `q=${encodeURIComponent(f.lookup)}&country=${f.country || "nl"}`;
+      const r = await fetch(api(`/podcast?${q}`));
+      const d = await r.json();
+      let hit = (d.results || [])[0];
+      if (f.match) hit = (d.results || []).find((x) => new RegExp(f.match, "i").test(x.by + " " + x.name)) || hit;
+      if (!hit) throw new Error("niet gevonden");
+      Object.assign(f, { url: hit.feed, image: hit.image, apple: hit.apple, by: hit.by });
+      save.feeds();
+    } catch (e) {
+      feedStatus[f.lookup || f.name] = { ok: false, err: "podcast niet gevonden: " + e.message, t: Date.now() };
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -503,8 +535,9 @@
     const body = el("div", { class: "body" },
       el("div", { class: "meta" },
         el("span", { class: "src" }, el("img", { src: favicon(it.link), alt: "", loading: "lazy" }), it.source),
-        el("span", {}, "· " + timeAgo(it.published))
+        el("span", {}, "· " + (it.podcast ? "uitgebracht " + fmtDate(it.published) : timeAgo(it.published)))
       ),
+      it.podcast ? el("div", { class: "pod-label" }, "🎧 Nieuwe aflevering" + (it.duration ? " · " + it.duration.replace(/^00?:/, "") : "")) : null,
       el("div", { class: "title" }, displayTitle(it)),
       hero && it.summary ? el("div", { class: "summary" }, it.summary) : null,
       el("div", { class: "foot" },
@@ -565,12 +598,22 @@
       el("div", { id: "reader-article" }, ...readButtons(it))
     );
     reader.scrollTop = 0;
-    if (settings.autoload && !it.paywall && settings.translateMode === "ai") loadArticle(it);
+    if (settings.autoload && !it.paywall && !it.podcast && settings.translateMode === "ai") loadArticle(it);
   }
 
   /** Knoppen onder de intro: afhankelijk van betaalmuur en vertaalmodus. */
   function readButtons(it) {
     const out = [];
+    if (it.podcast) {
+      out.push(
+        el("p", { class: "muted" }, "Uitgebracht op " + new Date(it.published).toLocaleDateString("nl-NL", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) + (it.duration ? " · " + it.duration : "")),
+        it.audio ? el("audio", { controls: true, preload: "none", src: it.audio, style: "width:100%;margin:8px 0 14px" }) : null,
+        el("a", { class: "btn block", href: spotifySearchUrl(it.source.replace(/\s*\(.*\)$/, "") + " " + it.title.slice(0, 60)), target: "_blank", rel: "noopener", onclick: () => learn(it, 1.5) }, "Open in Spotify"),
+        it.apple ? el("a", { class: "btn ghost block", href: it.apple, target: "_blank", rel: "noopener", style: "margin-top:8px" }, "Open in Apple Podcasts") : null,
+        el("p", { class: "muted", style: "text-align:center;margin-top:10px" }, el("a", { href: it.link, target: "_blank", rel: "noopener" }, "Pagina van de aflevering"))
+      );
+      return out;
+    }
     if (it.paywall === "archive") {
       out.push(
         el("div", { class: "notice" }, "Deze bron zit achter een betaalmuur. Via archive.is lees je meestal de volledige tekst."),
@@ -719,15 +762,16 @@
   function renderFeedList() {
     const list = $("#feed-list");
     list.replaceChildren();
-    const sel = $("#nf-cat");
-    sel.replaceChildren(...Object.entries(CATEGORIES).map(([k, v]) => el("option", { value: k }, v)));
+    for (const sel of [$("#nf-cat"), $("#np-cat")]) {
+      sel.replaceChildren(...Object.entries(CATEGORIES).map(([k, v]) => el("option", { value: k, selected: k === "ai" && sel.id === "np-cat" }, v)));
+    }
     for (const f of feeds) {
-      const st = feedStatus[f.url];
+      const st = feedStatus[f.url] || feedStatus[f.lookup || f.name];
       list.append(
         el("div", { class: "row" },
           el("div", { class: "info" },
-            el("div", { class: "name" }, el("img", { src: favicon(f.url), alt: "" }), f.name || host(f.url), el("span", { class: "badge" }, CATEGORIES[f.cat] || f.cat), el("span", { class: "badge lang" }, f.lang), f.paywall ? el("span", { class: "badge" }, "via archive.is") : null),
-            el("div", { class: "sub" + (st && !st.ok ? " err" : "") }, st ? (st.ok ? `${st.n} artikelen` : "Fout: " + st.err) : host(f.url))
+            el("div", { class: "name" }, el("img", { src: favicon(f.url), alt: "" }), f.name || host(f.url), el("span", { class: "badge" }, CATEGORIES[f.cat] || f.cat), el("span", { class: "badge lang" }, f.lang), f.paywall ? el("span", { class: "badge" }, "via archive.is") : null, f.podcast ? el("span", { class: "badge" }, "🎧 podcast") : null),
+            el("div", { class: "sub" + (st && !st.ok ? " err" : "") }, st ? (st.ok ? `${st.n} ${f.podcast ? "afleveringen" : "artikelen"}` : "Fout: " + st.err) : f.url ? host(f.url) : "wordt opgezocht…")
           ),
           el("input", { type: "checkbox", checked: f.enabled !== false, onchange: (e) => { f.enabled = e.target.checked; save.feeds(); } }),
           el("button", { class: "del", "aria-label": "Verwijderen", onclick: () => { if (confirm(`Bron "${f.name}" verwijderen?`)) { feeds = feeds.filter((x) => x !== f); save.feeds(); renderFeedList(); } } }, "✕")
@@ -735,6 +779,25 @@
       );
     }
   }
+  $("#add-podcast-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const q = $("#np-name").value.trim();
+    toast("Podcast zoeken…", 0);
+    try {
+      const r = await fetch(api(`/podcast?q=${encodeURIComponent(q)}&country=nl`));
+      const d = await r.json();
+      const hit = (d.results || [])[0];
+      if (!hit) throw new Error("niets gevonden");
+      if (feeds.some((f) => f.url === hit.feed)) return toast("Deze podcast staat er al in");
+      feeds.push({ url: hit.feed, podcast: true, name: hit.name, by: hit.by, image: hit.image, apple: hit.apple, cat: $("#np-cat").value, lang: /nl|dutch|nederland/i.test(hit.by + hit.name) ? "nl" : "en", enabled: true });
+      save.feeds();
+      renderFeedList();
+      e.target.reset();
+      toast(`"${hit.name}" (${hit.by}) toegevoegd`);
+    } catch (err) {
+      toast("Podcast niet gevonden: " + err.message, 5000);
+    }
+  };
   $("#add-feed-form").onsubmit = async (e) => {
     e.preventDefault();
     const url = $("#nf-url").value.trim();

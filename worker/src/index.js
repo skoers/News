@@ -37,6 +37,8 @@ export default {
           return withCache(request, ctx, FEED_TTL, cors, () => handleFeed(url));
         case "/article":
           return withCache(request, ctx, ARTICLE_TTL, cors, () => handleArticle(url, env));
+        case "/podcast":
+          return withCache(request, ctx, 86400, cors, () => handlePodcastLookup(url));
         case "/translate":
           if (request.method !== "POST") return json({ error: "POST required" }, 405, cors);
           return json(await handleTranslate(await request.json(), env, ctx), 200, cors);
@@ -138,6 +140,7 @@ async function handleFeed(url) {
     source: feed.title || new URL(finalUrl).hostname,
     url: finalUrl,
     fetched: new Date().toISOString(),
+    image: feed.image || "",
     items: feed.items,
   };
 }
@@ -154,6 +157,8 @@ function parseFeed(xml, feedUrl) {
   const head = xml.slice(0, blocks.length ? xml.search(/<(item|entry)(?:\s[^>]*)?>/) : xml.length);
   const isAtom = /<feed[\s>]/.test(head) && !/<rss[\s>]/.test(head);
   const title = clean(stripHtml(tagText(head, "title")));
+  const chImg = allTags(head, "itunes:image")[0];
+  const channelImage = (chImg && attrOf(chImg.open, "href")) || tagText(tagText(head, "image"), "url").trim() || "";
   let lang = isAtom ? attrOf(firstTag(head, "feed"), "xml:lang") : tagText(head, "language");
   lang = (lang || "").slice(0, 2).toLowerCase() || guessLang(feedUrl);
 
@@ -167,20 +172,24 @@ function parseFeed(xml, feedUrl) {
       const categories = [...new Set(
         allTags(b, "category").map((t) => clean(stripHtml(t.text || attrOf(t.open, "term") || "")).toLowerCase()).filter(Boolean)
       )].slice(0, 8);
+      const enclosure = allTags(b, "enclosure").find((e) => /^(audio|video)\//i.test(attrOf(e.open, "type")));
+      const audio = enclosure ? attrOf(enclosure.open, "url") : "";
+      const duration = clean(tagText(b, "itunes:duration"));
       return {
         id: hashString(link),
         title: clean(stripHtml(titleRaw)),
         link,
         summary: clean(stripHtml(descHtml)).slice(0, 400),
-        image: blockImage(b, descHtml, link),
+        image: blockImage(b, descHtml, link) || channelImage,
         published,
         categories,
         lang,
+        ...(audio ? { audio, duration } : {}),
       };
     })
     .filter((x) => x && x.title)
     .slice(0, 60);
-  return { title, items };
+  return { title, items, image: channelImage };
 }
 
 /** Eerste <name ...>...</name> (geen self-closing); CDATA uitgepakt, entities nog niet gedecodeerd. */
@@ -275,6 +284,34 @@ function blockImage(b, descHtml, link) {
     } catch {}
   }
   return "";
+}
+
+/* ---------------- /podcast (opzoeken via Apple Podcasts-catalogus) ---------------- */
+
+async function handlePodcastLookup(url) {
+  const q = (url.searchParams.get("q") || "").trim().slice(0, 100);
+  const id = (url.searchParams.get("id") || "").replace(/\D/g, "");
+  const country = (url.searchParams.get("country") || "nl").replace(/[^a-z]/gi, "").slice(0, 2) || "nl";
+  if (!q && !id) throw new Error("q of id vereist");
+  const api = id
+    ? `https://itunes.apple.com/lookup?id=${id}&entity=podcast`
+    : `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=podcast&country=${country}&limit=8`;
+  const res = await fetch(api, { headers: { "User-Agent": UA, Accept: "application/json" }, cf: { cacheTtl: 3600 } });
+  if (!res.ok) throw new Error(`catalogus gaf ${res.status}`);
+  const data = await res.json();
+  return {
+    results: (data.results || [])
+      .filter((r) => r.feedUrl)
+      .map((r) => ({
+        id: r.collectionId,
+        name: r.collectionName,
+        by: r.artistName,
+        feed: r.feedUrl,
+        image: r.artworkUrl600 || r.artworkUrl100 || "",
+        apple: r.collectionViewUrl || "",
+        genre: r.primaryGenreName || "",
+      })),
+  };
 }
 
 /* ---------------- /article ---------------- */

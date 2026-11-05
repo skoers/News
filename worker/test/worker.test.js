@@ -23,6 +23,7 @@ const env = {
 };
 const RSS = `<?xml version="1.0"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel><title>BBC News</title><language>en-gb</language>
 <item><title><![CDATA[Rates held &amp; markets react]]></title><link>https://www.bbc.co.uk/news/articles/abc</link><description><![CDATA[<p>The Bank of England held rates.</p>]]></description><pubDate>Tue, 28 Oct 2026 10:00:00 GMT</pubDate><media:thumbnail url="https://ichef.bbci.co.uk/x.jpg" width="240"/><category>Business</category></item>
+<item><title>Episode 12: AI at work</title><link>https://pod.example/ep12</link><enclosure url="https://cdn.example/ep12.mp3" type="audio/mpeg" length="1"/><itunes:duration>45:10</itunes:duration><itunes:image href="https://cdn.example/cover.jpg"/><pubDate>Mon, 27 Oct 2026 06:00:00 GMT</pubDate></item>
 <item><title>No link item</title><description>x</description></item>
 <item><title>Guid item</title><guid isPermaLink="true">https://www.bbc.co.uk/news/2</guid><enclosure url="/img/rel.jpg" type="image/jpeg"/><pubDate>garbage</pubDate></item>
 </channel></rss>`;
@@ -47,8 +48,12 @@ test("RSS 2.0 feed is normalised", async () => {
   assert.equal(res.status, 200);
   const data = await res.json();
   assert.equal(data.source, "BBC News");
-  assert.equal(data.items.length, 2, "item zonder link wordt overgeslagen");
-  const [a, b] = data.items;
+  assert.equal(data.items.length, 3, "item zonder link wordt overgeslagen");
+  const [a, ep, b] = data.items;
+  assert.equal(ep.audio, "https://cdn.example/ep12.mp3");
+  assert.equal(ep.duration, "45:10");
+  assert.equal(ep.image, "https://cdn.example/cover.jpg");
+  assert.equal(a.audio, undefined);
   assert.equal(a.title, "Rates held & markets react");
   assert.equal(a.link, "https://www.bbc.co.uk/news/articles/abc");
   assert.equal(a.image, "https://ichef.bbci.co.uk/x.jpg");

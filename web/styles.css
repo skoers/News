@@ -165,3 +165,6 @@ input[type=url], input[type=text], select { padding: 10px 12px; border-radius: 1
 .chip button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: .8rem; padding: 2px 6px; opacity: .7; }
 .inline-form { display: flex; gap: 8px; }
 .inline-form input { flex: 1; }
+
+.pod-label { font-size: .78rem; font-weight: 600; color: var(--accent); margin-bottom: 4px; }
+.reader-body audio { border-radius: 999px; }

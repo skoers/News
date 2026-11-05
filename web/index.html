@@ -75,6 +75,14 @@
       <p class="muted">Zet bronnen aan of uit. Je klikgedrag bepaalt daarna automatisch welke bronnen en onderwerpen hoger komen.</p>
       <div id="feed-list" class="feed-list"></div>
       <details class="add-feed">
+        <summary>Podcast toevoegen (op naam)</summary>
+        <form id="add-podcast-form">
+          <input type="text" id="np-name" placeholder="bijv. Hard Fork" required>
+          <select id="np-cat"></select>
+          <button type="submit" class="btn">Zoeken en toevoegen</button>
+        </form>
+      </details>
+      <details class="add-feed">
         <summary>Bron toevoegen (RSS/Atom-URL)</summary>
         <form id="add-feed-form">
           <input type="url" id="nf-url" placeholder="https://voorbeeld.nl/rss" required>
