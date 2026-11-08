@@ -135,14 +135,44 @@ async function handleFeed(url) {
     src,
     "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5"
   );
-  const feed = parseFeed(text, finalUrl);
+  let feed;
+  try {
+    feed = parseFeed(text, finalUrl);
+  } catch (e) {
+    // Geen feed maar een HTML-pagina? Zoek de aangekondigde RSS/Atom-feed en probeer die.
+    const alt = discoverFeed(text, finalUrl);
+    if (!alt) throw e;
+    const second = await fetchText(new URL(alt), "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5");
+    feed = parseFeed(second.text, second.finalUrl);
+    feed.discovered = second.finalUrl;
+  }
   return {
+    discovered: feed.discovered || "",
     source: feed.title || new URL(finalUrl).hostname,
     url: finalUrl,
     fetched: new Date().toISOString(),
     image: feed.image || "",
     items: feed.items,
   };
+}
+
+/** Zoekt <link rel="alternate" type="application/rss+xml|atom+xml" href=...> in een HTML-pagina. */
+function discoverFeed(html, baseUrl) {
+  const head = String(html).slice(0, 200000);
+  const re = /<link\s[^>]*>/gi;
+  let m;
+  while ((m = re.exec(head))) {
+    const tag = m[0];
+    const type = attrOf(tag.slice(5), "type").toLowerCase();
+    const rel = attrOf(tag.slice(5), "rel").toLowerCase();
+    if (/rss|atom/.test(type) && /alternate|feed/.test(rel)) {
+      const href = attrOf(tag.slice(5), "href");
+      if (href) {
+        try { return new URL(href, baseUrl).toString(); } catch {}
+      }
+    }
+  }
+  return "";
 }
 
 /* ---- compacte RSS 2.0 / Atom / RDF parser (geen externe dependency) ---- */

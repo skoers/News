@@ -36,8 +36,9 @@ ${Array.from({length: 8}, (_, i) => `<p>Paragraph number ${i} of the article bod
 <footer><p>Copyright BBC. All rights reserved and some more footer text here.</p></footer></body></html>`;
 const PAYWALLED = `<!doctype html><html><head><script type="application/ld+json">{"@type":"NewsArticle","isAccessibleForFree":false}</script></head><body><article><p>Short teaser only. Subscribe to continue reading this article today.</p></article></body></html>`;
 
+const SITE = `<!doctype html><html><head><title>Site</title><link rel="alternate" type="application/rss+xml" title="Feed" href="/rss.xml"></head><body><p>hoi</p></body></html>`;
 globalThis.fetch = async (url) => {
-  const body = url.includes("rss") ? RSS : url.includes("atom") ? ATOM : url.includes("paywall") ? PAYWALLED : HTML;
+  const body = url.includes("site.example/") && !url.includes("rss") ? SITE : url.includes("rss") ? RSS : url.includes("atom") ? ATOM : url.includes("paywall") ? PAYWALLED : HTML;
   return new Response(body, { status: 200, headers: { "content-type": "text/html" }, });
 };
 const call = (path, init) => worker.fetch(new Request("https://api.test" + path, { headers: { Origin: "https://skoers.github.io" }, ...init }), env, ctx);
@@ -122,4 +123,11 @@ test("fout bij ophalen bron geeft JSON-fout, geen exception", async () => {
     const d = await res.json();
     assert.match(d.error, /503/);
   } finally { globalThis.fetch = orig; }
+});
+
+test("feed-autodiscovery vanaf een HTML-pagina", async () => {
+  const data = await (await call("/feed?url=https://site.example/some-article")).json();
+  assert.equal(data.source, "BBC News");
+  assert.equal(data.discovered, "https://site.example/rss.xml");
+  assert.ok(data.items.length >= 2);
 });

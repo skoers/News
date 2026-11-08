@@ -47,8 +47,13 @@
     { url: "https://feeds.bbci.co.uk/news/business/rss.xml", name: "BBC Business", cat: "economie", lang: "en" },
     { url: "https://www.theguardian.com/uk/business/rss", name: "Guardian Business", cat: "economie", lang: "en" },
     { url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", name: "CNBC", cat: "economie", lang: "en" },
-    // FD zit achter een betaalmuur: artikelen worden via archive.is geopend
-    { url: "https://fd.nl/?rss", name: "FD", cat: "economie", lang: "nl", paywall: "archive" },
+    // FD en FT: deels betaalmuur. De app probeert eerst het artikel; zit het dicht, dan omwegen (archive.ph / archive.org)
+    { url: "https://fd.nl/?rss", name: "FD", cat: "economie", lang: "nl", paywall: "check" },
+    { url: "https://www.ft.com/rss/home", name: "Financial Times", cat: "economie", lang: "en", paywall: "check" },
+    { url: "https://www.ft.com/technology?format=rss", name: "FT Technology", cat: "tech", lang: "en", paywall: "check" },
+    { url: "https://www.ft.com/artificial-intelligence?format=rss", name: "FT Artificial Intelligence", cat: "ai", lang: "en", paywall: "check" },
+    { url: "https://www.ft.com/climate-capital?format=rss", name: "FT Climate Capital", cat: "wonen", lang: "en", paywall: "check" },
+    { url: "https://www.ft.com/companies/automobiles?format=rss", name: "FT Automobiles", cat: "mobiliteit", lang: "en", paywall: "check" },
     // AI
     { url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", name: "The Verge AI", cat: "ai", lang: "en" },
     { url: "https://techcrunch.com/category/artificial-intelligence/feed/", name: "TechCrunch AI", cat: "ai", lang: "en" },
@@ -86,7 +91,8 @@
   const spotifySearchUrl = (q) => "https://open.spotify.com/search/" + encodeURIComponent(q) + "/podcastAndEpisodes";
   // Onderwerpen die je expliciet volgt (aanpasbaar in Instellingen). Tellen zwaar mee in de rangschikking.
   const DEFAULT_INTERESTS = ["livewire", "elektrische motor", "electric motorcycle", "elektrische scooter", "e-scooter", "typegoedkeuring", "rdw", "e-bike", "warmtepomp", "huizenprijzen", "woningmarkt"];
-  const archiveUrl = (u) => "https://archive.is/newest/" + u;
+  const archiveUrl = (u) => "https://archive.ph/newest/" + u;
+  const waybackUrl = (u) => "https://web.archive.org/web/2/" + u;
   const googleTranslateUrl = (u) => "https://translate.google.com/translate?sl=auto&tl=nl&u=" + encodeURIComponent(u);
 
   // Woorden die nooit een onderwerp of tab mogen worden (te generiek, komen uit feed-categorieën)
@@ -119,6 +125,10 @@
   );
   let feeds = store.get("feeds", null) || DEFAULT_FEEDS.map((f) => ({ ...f, enabled: true }));
   // Migraties van eerder opgeslagen bronlijsten
+  for (const f of feeds) if (/fd\.nl/.test(f.url || "") && f.paywall === "archive") { f.paywall = "check"; store.set("feeds", feeds); }
+  for (const d of DEFAULT_FEEDS.filter((f) => /ft\.com/.test(f.url))) {
+    if (!feeds.some((f) => f.url === d.url)) { feeds.push({ ...d, enabled: true }); store.set("feeds", feeds); }
+  }
   feeds = feeds.filter((f) => !/livewire\.com\/blogs\/news\.atom/.test(f.url || ""));
   for (const d of DEFAULT_FEEDS.filter((f) => f.podcast)) {
     if (!feeds.some((f) => f.podcast && f.name === d.name)) { feeds.push({ ...d, enabled: true }); store.set("feeds", feeds); }
@@ -650,8 +660,9 @@
     }
     if (it.paywall === "archive") {
       out.push(
-        el("div", { class: "notice" }, "Deze bron zit achter een betaalmuur. Via archive.is lees je meestal de volledige tekst."),
-        el("a", { class: "btn block", href: archiveUrl(it.link), target: "_blank", rel: "noopener", onclick: () => learn(it, 1.5) }, "Open via archive.is"),
+        el("div", { class: "notice" }, "Deze bron zit achter een betaalmuur. Via een archiefkopie lees je vaak de volledige tekst."),
+        el("a", { class: "btn block", href: archiveUrl(it.link), target: "_blank", rel: "noopener", onclick: () => learn(it, 1.5) }, "Open via archive.ph"),
+        el("a", { class: "btn ghost block", href: waybackUrl(it.link), target: "_blank", rel: "noopener", style: "margin-top:8px" }, "Open via archive.org (Wayback)"),
         el("a", { class: "btn ghost block", href: it.link, target: "_blank", rel: "noopener", style: "margin-top:8px" }, "Open origineel op " + it.sourceHost)
       );
       return out;
@@ -684,8 +695,9 @@
       if (a.error) throw new Error(a.error);
       if (a.paywall || !a.paragraphs?.length) {
         box.replaceChildren(
-          el("div", { class: "notice" }, a.paywall ? "Dit artikel zit achter een betaalmuur of login. Probeer archive.is of open het origineel." : "De tekst van dit artikel kon niet worden uitgelezen."),
-          el("a", { class: "btn block", href: archiveUrl(it.link), target: "_blank", rel: "noopener" }, "Open via archive.is"),
+          el("div", { class: "notice" }, a.paywall ? "Dit artikel zit achter een betaalmuur of login. Probeer een archiefkopie of open het origineel." : "De tekst van dit artikel kon niet worden uitgelezen."),
+          el("a", { class: "btn block", href: archiveUrl(it.link), target: "_blank", rel: "noopener" }, "Open via archive.ph"),
+          el("a", { class: "btn ghost block", href: waybackUrl(it.link), target: "_blank", rel: "noopener", style: "margin-top:8px" }, "Open via archive.org (Wayback)"),
           it.lang !== "nl" ? el("a", { class: "btn ghost block", href: googleTranslateUrl(it.link), target: "_blank", rel: "noopener", style: "margin-top:8px" }, "Open vertaald via Google Translate") : null,
           el("a", { class: "btn ghost block", href: it.link, target: "_blank", rel: "noopener", style: "margin-top:8px" }, "Open origineel op " + it.sourceHost)
         );
@@ -804,7 +816,7 @@
       list.append(
         el("div", { class: "row" },
           el("div", { class: "info" },
-            el("div", { class: "name" }, el("img", { src: favicon(f.url), alt: "" }), f.name || host(f.url), el("span", { class: "badge" }, CATEGORIES[f.cat] || f.cat), el("span", { class: "badge lang" }, f.lang), f.paywall ? el("span", { class: "badge" }, "via archive.is") : null, f.podcast ? el("span", { class: "badge" }, "🎧 podcast") : null),
+            el("div", { class: "name" }, el("img", { src: favicon(f.url), alt: "" }), f.name || host(f.url), el("span", { class: "badge" }, CATEGORIES[f.cat] || f.cat), el("span", { class: "badge lang" }, f.lang), f.paywall === "archive" ? el("span", { class: "badge" }, "via archief") : f.paywall === "check" ? el("span", { class: "badge" }, "deels betaalmuur") : null, f.podcast ? el("span", { class: "badge" }, "🎧 podcast") : null),
             el("div", { class: "sub" + (st && !st.ok ? " err" : "") }, st ? (st.ok ? `${st.n} ${f.podcast ? "afleveringen" : "artikelen"}` : "Fout: " + st.err) : f.url ? host(f.url) : "wordt opgezocht…")
           ),
           el("input", { type: "checkbox", checked: f.enabled !== false, onchange: (e) => { f.enabled = e.target.checked; save.feeds(); } }),
@@ -844,12 +856,13 @@
       const d = await r.json();
       if (d.error) throw new Error(d.error);
       const lang = d.items[0]?.lang || "en";
-      feeds.push({ url, name: name || d.source || host(url), cat, lang, paywall, enabled: true });
+      const feedUrl = d.discovered || url;
+      feeds.push({ url: feedUrl, name: name || d.source || host(url), cat, lang, paywall, enabled: true });
       save.feeds();
       feedStatus[url] = { ok: true, n: d.items.length, t: Date.now() };
       renderFeedList();
       e.target.reset();
-      toast(`"${name || d.source}" toegevoegd (${d.items.length} artikelen)`);
+      toast(`"${name || d.source}" toegevoegd (${d.items.length} artikelen${d.discovered ? ", feed gevonden op de pagina" : ""})`);
     } catch (err) {
       toast("Feed niet geldig: " + err.message, 5000);
     }
