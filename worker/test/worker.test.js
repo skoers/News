@@ -131,3 +131,17 @@ test("feed-autodiscovery vanaf een HTML-pagina", async () => {
   assert.equal(data.discovered, "https://site.example/rss.xml");
   assert.ok(data.items.length >= 2);
 });
+
+test("/archive meldt Wayback- en archive.ph-kopie", async () => {
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes("archive.org")) return new Response(JSON.stringify({ archived_snapshots: { closest: { available: true, url: "http://web.archive.org/web/2026/https://fd.nl/x" } } }));
+    if (String(url).includes("archive.ph")) return new Response(null, { status: 302, headers: { location: "https://archive.ph/AbCd" } });
+    return orig(url, init);
+  };
+  try {
+    const d = await (await call("/archive?url=https://fd.nl/x")).json();
+    assert.equal(d.wayback, "https://web.archive.org/web/2026/https://fd.nl/x");
+    assert.equal(d.archiveph, "https://archive.ph/AbCd");
+  } finally { globalThis.fetch = orig; }
+});

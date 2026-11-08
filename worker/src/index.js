@@ -37,6 +37,8 @@ export default {
           return await withCache(request, ctx, FEED_TTL, cors, () => handleFeed(url));
         case "/article":
           return await withCache(request, ctx, ARTICLE_TTL, cors, () => handleArticle(url, env));
+        case "/archive":
+          return await withCache(request, ctx, 1800, cors, () => handleArchiveCheck(url));
         case "/podcast":
           return await withCache(request, ctx, 86400, cors, () => handlePodcastLookup(url));
         case "/translate":
@@ -342,6 +344,35 @@ async function handlePodcastLookup(url) {
         genre: r.primaryGenreName || "",
       })),
   };
+}
+
+/* ---------------- /archive: is er een archiefkopie? ---------------- */
+
+async function handleArchiveCheck(url) {
+  const target = requireHttpUrl(url.searchParams.get("url")).toString();
+  const out = { url: target, wayback: null, archiveph: null, checked: new Date().toISOString() };
+  await Promise.all([
+    (async () => {
+      try {
+        const r = await fetch(`https://archive.org/wayback/available?url=${encodeURIComponent(target)}`, { headers: { "User-Agent": UA }, cf: { cacheTtl: 600 } });
+        const d = await r.json();
+        const snap = d?.archived_snapshots?.closest;
+        if (snap?.available && snap.url) out.wayback = snap.url.replace(/^http:/, "https:");
+      } catch {}
+    })(),
+    (async () => {
+      try {
+        // archive.ph stuurt door naar de nieuwste kopie als die bestaat; 404 als die er niet is
+        const r = await fetch(`https://archive.ph/newest/${target}`, { redirect: "manual", headers: { "User-Agent": UA, Accept: "text/html" } });
+        if (r.status >= 300 && r.status < 400 && r.headers.get("location")) out.archiveph = r.headers.get("location");
+        else if (r.status === 200) out.archiveph = `https://archive.ph/newest/${target}`;
+        else if (r.status !== 404) out.archiveph = "unknown"; // geblokkeerd of rate limit: onbekend
+      } catch {
+        out.archiveph = "unknown";
+      }
+    })(),
+  ]);
+  return out;
 }
 
 /* ---------------- /article ---------------- */

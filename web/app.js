@@ -48,7 +48,8 @@
     { url: "https://www.theguardian.com/uk/business/rss", name: "Guardian Business", cat: "economie", lang: "en" },
     { url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", name: "CNBC", cat: "economie", lang: "en" },
     // FD en FT: deels betaalmuur. De app probeert eerst het artikel; zit het dicht, dan omwegen (archive.ph / archive.org)
-    { url: "https://fd.nl/?rss", name: "FD", cat: "economie", lang: "nl", paywall: "check" },
+    // FD: tonen zodra er een archiefkopie is, anders pas na 8 uur
+    { url: "https://fd.nl/?rss", name: "FD", cat: "economie", lang: "nl", paywall: "archivecheck", delayHours: 8 },
     { url: "https://www.ft.com/rss/home", name: "Financial Times", cat: "economie", lang: "en", paywall: "check" },
     { url: "https://www.ft.com/technology?format=rss", name: "FT Technology", cat: "tech", lang: "en", paywall: "check" },
     { url: "https://www.ft.com/artificial-intelligence?format=rss", name: "FT Artificial Intelligence", cat: "ai", lang: "en", paywall: "check" },
@@ -125,7 +126,7 @@
   );
   let feeds = store.get("feeds", null) || DEFAULT_FEEDS.map((f) => ({ ...f, enabled: true }));
   // Migraties van eerder opgeslagen bronlijsten
-  for (const f of feeds) if (/fd\.nl/.test(f.url || "") && f.paywall === "archive") { f.paywall = "check"; store.set("feeds", feeds); }
+  for (const f of feeds) if (/fd\.nl/.test(f.url || "") && f.paywall !== "archivecheck") { f.paywall = "archivecheck"; f.delayHours = 8; store.set("feeds", feeds); }
   for (const d of DEFAULT_FEEDS.filter((f) => /ft\.com/.test(f.url))) {
     if (!feeds.some((f) => f.url === d.url)) { feeds.push({ ...d, enabled: true }); store.set("feeds", feeds); }
   }
@@ -138,7 +139,9 @@
   let readSet = new Set(store.get("read", []));
   let interests = store.get("interests", null) || DEFAULT_INTERESTS.slice();
   let votes = store.get("votes", {});
-  let ignored = new Set(store.get("ignored", [])); // id -> 1 (interessant) | -1 (niet interessant)
+  let ignored = new Set(store.get("ignored", []));
+  let saved = store.get("saved", {}); // id -> item (bewaard voor later / wachten op archiefkopie)
+  let archiveInfo = store.get("archive", {}); // id -> { wayback, archiveph, checked } // id -> 1 (interessant) | -1 (niet interessant)
   let items = store.get("cache.items", []);
   let feedStatus = {};
   let activeTab = store.get("tab", "voorjou");
@@ -151,6 +154,12 @@
     read: () => store.set("read", [...readSet].slice(-2000)),
     interests: () => store.set("interests", interests),
     ignored: () => store.set("ignored", [...ignored]),
+    saved: () => store.set("saved", saved),
+    archive: () => {
+      const keys = Object.keys(archiveInfo);
+      if (keys.length > 800) for (const k of keys.slice(0, keys.length - 800)) delete archiveInfo[k];
+      store.set("archive", archiveInfo);
+    },
     votes: () => {
       const keys = Object.keys(votes);
       if (keys.length > 3000) for (const k of keys.slice(0, keys.length - 3000)) delete votes[k];
@@ -344,8 +353,9 @@
       const readPenalty = readSet.has(it.id) ? -2 : 0;
       const downvote = votes[it.id] === -1 ? -5 : 0;
       const podcastBoost = it.podcast && ageH < 7 * 24 && !readSet.has(it.id) ? 1.2 : 0;
+      const savedBoost = saved[it.id] && hasArchive(it) && !readSet.has(it.id) ? 3 : 0;
       it.why = whyLabel(it, aff);
-      return { it, score: fresh * (1 + Math.max(-0.9, aff.total)) + 0.3 * fresh + img + readPenalty + downvote + podcastBoost + (Math.random() - 0.5) * 0.05 };
+      return { it, score: fresh * (1 + Math.max(-0.9, aff.total)) + 0.3 * fresh + img + readPenalty + downvote + podcastBoost + savedBoost + (Math.random() - 0.5) * 0.05 };
     });
     scored.sort((a, b) => b.score - a.score);
     // Diversiteit: maximaal 2 artikelen van dezelfde bron per 6 posities bovenaan
@@ -411,6 +421,7 @@
             apple: f.apple || "",
             image: it.image || f.image || data.image || "",
             paywall: f.paywall || "",
+            delayHours: f.delayHours || 0,
             lang: f.lang || it.lang || "en",
             kw: keywords(it.title + " " + (it.summary || "").slice(0, 160)),
           }));
@@ -428,7 +439,9 @@
     // bewaar ook oudere items (max 48 u) die uit de feed verdwenen zijn
     const cutoff = Date.now() - 48 * 3600000;
     for (const old of items) if (!merged.has(old.id) && new Date(old.published).getTime() > cutoff && feeds.some((f) => f.url === old.feedUrl && f.enabled !== false)) merged.set(old.id, old);
-    items = dedupe([...merged.values()].filter((it) => new Date(it.published).getTime() > Date.now() - (it.podcast ? 14 * 24 : 72) * 3600000 || !it.published));
+    for (const sv of Object.values(saved)) if (!merged.has(sv.id)) merged.set(sv.id, sv);
+    items = dedupe([...merged.values()].filter((it) => saved[it.id] || new Date(it.published).getTime() > Date.now() - (it.podcast ? 14 * 24 : 72) * 3600000 || !it.published));
+    checkArchives();
     save.items();
     const failed = Object.values(feedStatus).filter((s) => !s.ok).length;
     if (failed && !items.length) toast("Kon geen feeds laden. Controleer het API-adres in Instellingen.", 6000);
@@ -466,6 +479,69 @@
     } catch (e) {
       feedStatus[f.lookup || f.name] = { ok: false, err: "podcast niet gevonden: " + e.message, t: Date.now() };
     }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Archiefkopieën (betaalmuur-omweg)                                    */
+  /* ------------------------------------------------------------------ */
+  const hasArchive = (it) => { const a = archiveInfo[it.id]; return !!(a && (a.wayback || (a.archiveph && a.archiveph !== "unknown"))); };
+  const archiveLink = (it) => { const a = archiveInfo[it.id] || {}; return a.wayback || (a.archiveph !== "unknown" ? a.archiveph : "") || ""; };
+  /** Zichtbaar? Betaalmuur-bronnen met wachttijd pas tonen bij archiefkopie of na de wachttijd. */
+  function visibleNow(it) {
+    if (!it.delayHours) return true;
+    if (saved[it.id] || hasArchive(it)) return true;
+    return Date.now() - new Date(it.published).getTime() > it.delayHours * 3600000;
+  }
+  let checkingArchives = false;
+  async function checkArchives() {
+    if (checkingArchives || !settings.apiBase) return;
+    const now = Date.now();
+    const due = items.filter((it) => {
+      if (!(it.delayHours || saved[it.id])) return false;
+      if (hasArchive(it)) return false;
+      const a = archiveInfo[it.id];
+      const age = now - new Date(it.published).getTime();
+      if (age < 45 * 60000) return false; // jonger dan drie kwartier: nog geen kopie te verwachten
+      const interval = age < 6 * 3600000 ? 30 * 60000 : age < 48 * 3600000 ? 2 * 3600000 : 12 * 3600000;
+      return !a || now - (a.checked || 0) > interval;
+    }).slice(0, 15);
+    if (!due.length) return;
+    checkingArchives = true;
+    let found = 0;
+    try {
+      await Promise.all(due.map(async (it) => {
+        try {
+          const r = await fetch(api(`/archive?url=${encodeURIComponent(it.link)}`));
+          const d = await r.json();
+          const was = hasArchive(it);
+          archiveInfo[it.id] = { wayback: d.wayback || null, archiveph: d.archiveph || null, checked: now };
+          if (!was && hasArchive(it)) found++;
+        } catch {
+          archiveInfo[it.id] = { ...(archiveInfo[it.id] || {}), checked: now };
+        }
+      }));
+      save.archive();
+      if (found) {
+        toast(`${found} bewaard artikel${found > 1 ? "en" : ""} nu leesbaar via archiefkopie`, 4000);
+        render(true);
+      }
+    } finally {
+      checkingArchives = false;
+    }
+  }
+  function toggleSave(it) {
+    markInteracted();
+    if (saved[it.id]) {
+      delete saved[it.id];
+      toast("Niet meer bewaard", 1200);
+    } else {
+      saved[it.id] = { ...it, savedAt: Date.now() };
+      learn(it, 1);
+      toast(hasArchive(it) ? "Bewaard" : "Bewaard · je ziet hem bovenaan zodra er een archiefkopie is", 3000);
+      checkArchives();
+    }
+    save.saved();
+    render(true);
   }
 
   /* ------------------------------------------------------------------ */
@@ -527,6 +603,7 @@
     const tabs = [["voorjou", "Voor jou"], ["laatste", "Laatste"]];
     for (const [k, label] of Object.entries(CATEGORIES)) if (usedCats.has(k)) tabs.push([k, label]);
     if (feeds.some((f) => f.podcast && f.enabled !== false)) tabs.push(["podcasts", "🎧 Podcasts"]);
+    if (Object.keys(saved).length) tabs.push(["bewaard", "🔖 Bewaard"]);
     for (const w of learnedTabs()) tabs.push(["kw:" + w, w[0].toUpperCase() + w.slice(1), true]);
     for (const [key, label, learned] of tabs) {
       tabsEl.append(
@@ -546,7 +623,8 @@
   }
 
   function currentList() {
-    let list = items;
+    let list = items.filter(visibleNow);
+    if (activeTab === "bewaard") return list.filter((it) => saved[it.id]).sort((a, b) => (saved[b.id].savedAt || 0) - (saved[a.id].savedAt || 0));
     if (settings.hideRead) list = list.filter((it) => !readSet.has(it.id));
     if (activeTab === "laatste") return [...list].sort((a, b) => new Date(b.published) - new Date(a.published));
     if (activeTab === "podcasts") return list.filter((it) => it.podcast).sort((a, b) => new Date(b.published) - new Date(a.published));
@@ -575,7 +653,9 @@
         it.lang !== "nl" ? el("span", { class: "badge lang" }, it.lang) : null,
         it.why ? el("span", { class: "badge why" }, it.why) : null,
         it.dupes ? el("span", { class: "badge" }, `+${it.dupes} bron${it.dupes > 1 ? "nen" : ""}`) : null,
+        hasArchive(it) ? el("span", { class: "badge ok" }, "Archiefkopie") : it.delayHours && saved[it.id] ? el("span", { class: "badge" }, "Wacht op archief") : null,
         el("span", { class: "votes" },
+          el("button", { class: "vote" + (saved[it.id] ? " on" : ""), "aria-label": "Bewaren", title: "Bewaren voor later", onclick: (e) => { e.stopPropagation(); toggleSave(it); } }, "🔖"),
           el("button", { class: "vote" + (votes[it.id] === 1 ? " on" : ""), "aria-label": "Interessant", title: "Meer hiervan", onclick: (e) => { e.stopPropagation(); vote(it, 1); } }, "👍"),
           el("button", { class: "vote" + (votes[it.id] === -1 ? " on" : ""), "aria-label": "Niet interessant", title: "Minder hiervan", onclick: (e) => { e.stopPropagation(); vote(it, -1); } }, "👎")
         )
@@ -635,6 +715,7 @@
       el("h1", { id: "reader-title" }, displayTitle(it)),
       el("div", { class: "meta" }, el("span", {}, it.source), el("span", {}, "· " + timeAgo(it.published)), it.lang !== "nl" ? el("span", { class: "badge lang" }, it.lang) : null,
         el("span", { class: "votes" },
+          el("button", { class: "vote" + (saved[it.id] ? " on" : ""), onclick: (e) => { toggleSave(it); e.target.classList.toggle("on", !!saved[it.id]); } }, "🔖 Bewaar"),
           el("button", { class: "vote" + (votes[it.id] === 1 ? " on" : ""), onclick: (e) => { vote(it, 1); e.target.classList.toggle("on", votes[it.id] === 1); e.target.nextSibling.classList.remove("on"); } }, "👍 Meer"),
           el("button", { class: "vote" + (votes[it.id] === -1 ? " on" : ""), onclick: (e) => { vote(it, -1); e.target.classList.toggle("on", votes[it.id] === -1); e.target.previousSibling.classList.remove("on"); } }, "👎 Minder")
         )),
@@ -642,12 +723,35 @@
       el("div", { id: "reader-article" }, ...readButtons(it))
     );
     reader.scrollTop = 0;
-    if (settings.autoload && !it.paywall && !it.podcast && settings.translateMode === "ai") loadArticle(it);
+    if (it.delayHours && archiveInfo[it.id]?.wayback) loadArticle(it, archiveInfo[it.id].wayback);
+    else if (settings.autoload && !it.paywall && !it.podcast && settings.translateMode === "ai") loadArticle(it);
   }
 
   /** Knoppen onder de intro: afhankelijk van betaalmuur en vertaalmodus. */
   function readButtons(it) {
     const out = [];
+    if (it.delayHours || it.paywall === "archivecheck") {
+      const a = archiveInfo[it.id] || {};
+      if (a.wayback) {
+        out.push(
+          el("button", { class: "btn block", onclick: () => loadArticle(it, a.wayback) }, "Lees via archiefkopie (archive.org)"),
+          a.archiveph && a.archiveph !== "unknown" ? el("a", { class: "btn ghost block", href: a.archiveph, target: "_blank", rel: "noopener", style: "margin-top:8px" }, "Open op archive.ph") : null
+        );
+      } else if (a.archiveph && a.archiveph !== "unknown") {
+        out.push(el("a", { class: "btn block", href: a.archiveph, target: "_blank", rel: "noopener", onclick: () => learn(it, 1.5) }, "Open archiefkopie op archive.ph"));
+      } else {
+        out.push(
+          el("div", { class: "notice" }, saved[it.id] ? "Bewaard. Zodra er een archiefkopie van dit artikel bestaat, zie je het bovenaan 'Voor jou'." : "Nog geen archiefkopie gevonden. Bewaar het artikel; de app controleert het op de achtergrond en zet het bovenaan zodra het leesbaar is."),
+          saved[it.id] ? null : el("button", { class: "btn block", onclick: () => { toggleSave(it); closeReader(false); } }, "🔖 Bewaren en later lezen"),
+          el("button", { class: "btn ghost block", style: "margin-top:8px", onclick: () => loadArticle(it) }, "Toch proberen (mogelijk betaalmuur)")
+        );
+      }
+      out.push(el("p", { class: "muted", style: "text-align:center;margin-top:10px" },
+        el("a", { href: archiveUrl(it.link), target: "_blank", rel: "noopener" }, "archive.ph"), " · ",
+        el("a", { href: waybackUrl(it.link), target: "_blank", rel: "noopener" }, "archive.org"), " · ",
+        el("a", { href: it.link, target: "_blank", rel: "noopener" }, "origineel")));
+      return out;
+    }
     if (it.podcast) {
       out.push(
         el("p", { class: "muted" }, "Uitgebracht op " + new Date(it.published).toLocaleDateString("nl-NL", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) + (it.duration ? " · " + it.duration : "")),
@@ -683,13 +787,13 @@
     return out;
   }
 
-  async function loadArticle(it) {
+  async function loadArticle(it, viaUrl) {
     const box = $("#reader-article");
     box.replaceChildren(el("div", { class: "notice" }, it.lang === "nl" ? "Artikel laden…" : "Artikel ophalen en vertalen… (10–20 s)"));
     readerAbort?.abort();
     const ctrl = (readerAbort = new AbortController());
     try {
-      const r = await fetch(api(`/article?url=${encodeURIComponent(it.link)}`), { signal: ctrl.signal });
+      const r = await fetch(api(`/article?url=${encodeURIComponent(viaUrl || it.link)}`), { signal: ctrl.signal });
       const a = await r.json();
       if (ctrl.signal.aborted) return;
       if (a.error) throw new Error(a.error);
@@ -816,7 +920,7 @@
       list.append(
         el("div", { class: "row" },
           el("div", { class: "info" },
-            el("div", { class: "name" }, el("img", { src: favicon(f.url), alt: "" }), f.name || host(f.url), el("span", { class: "badge" }, CATEGORIES[f.cat] || f.cat), el("span", { class: "badge lang" }, f.lang), f.paywall === "archive" ? el("span", { class: "badge" }, "via archief") : f.paywall === "check" ? el("span", { class: "badge" }, "deels betaalmuur") : null, f.podcast ? el("span", { class: "badge" }, "🎧 podcast") : null),
+            el("div", { class: "name" }, el("img", { src: favicon(f.url), alt: "" }), f.name || host(f.url), el("span", { class: "badge" }, CATEGORIES[f.cat] || f.cat), el("span", { class: "badge lang" }, f.lang), f.paywall === "archive" ? el("span", { class: "badge" }, "via archief") : f.paywall === "check" ? el("span", { class: "badge" }, "deels betaalmuur") : f.paywall === "archivecheck" ? el("span", { class: "badge" }, `via archief, anders na ${f.delayHours || 8} u`) : null, f.podcast ? el("span", { class: "badge" }, "🎧 podcast") : null),
             el("div", { class: "sub" + (st && !st.ok ? " err" : "") }, st ? (st.ok ? `${st.n} ${f.podcast ? "afleveringen" : "artikelen"}` : "Fout: " + st.err) : f.url ? host(f.url) : "wordt opgezocht…")
           ),
           el("input", { type: "checkbox", checked: f.enabled !== false, onchange: (e) => { f.enabled = e.target.checked; save.feeds(); } }),
@@ -894,7 +998,7 @@
     toast("Profiel gewist");
   };
   $("#btn-export").onclick = () => {
-    const blob = new Blob([JSON.stringify({ version: 2, settings, feeds, profile, interests, votes, read: [...readSet] }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ version: 3, settings, feeds, profile, interests, votes, saved, read: [...readSet] }, null, 2)], { type: "application/json" });
     const a = el("a", { href: URL.createObjectURL(blob), download: `mijn-nieuws-${new Date().toISOString().slice(0, 10)}.json` });
     document.body.append(a);
     a.click();
@@ -911,6 +1015,7 @@
       if (d.read) readSet = new Set(d.read);
       if (d.interests) interests = d.interests;
       if (d.votes) votes = d.votes;
+      if (d.saved) { saved = d.saved; save.saved(); }
       save.feeds(); save.profile(); save.settings(); save.read(); save.interests(); save.votes();
       openSettings();
       toast("Geïmporteerd");
@@ -929,6 +1034,7 @@
   $("#btn-refresh").onclick = () => { interacted = true; refresh(true); };
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && Date.now() - lastRefresh > 10 * 60000) refresh();
+    else if (document.visibilityState === "visible") checkArchives();
   });
 
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

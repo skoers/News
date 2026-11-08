@@ -178,3 +178,6 @@ input[type=url], input[type=text], select { padding: 10px 12px; border-radius: 1
 .pod-title { font-size: .85rem; font-weight: 600; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin-top: 2px; }
 .pod-date { font-size: .72rem; color: var(--accent); margin-top: 4px; }
 .profile .bar .del { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: .75rem; }
+
+.badge.ok { background: #d9f2e3; color: #0b6b3a; }
+@media (prefers-color-scheme: dark) { .badge.ok { background: #16402a; color: #9fe2b8; } }
